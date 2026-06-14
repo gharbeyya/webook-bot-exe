@@ -1,163 +1,133 @@
-import requests
-import json
-import time
+import asyncio
+import httpx
+import random
+import logging
+from datetime import datetime
 
-# =====================================================
-#   Joke API Tests - اختبارات لمصادر النكات المختلفة
-# =====================================================
+# --- 1. إعدادات المراقبة والـ Logs (تم تصحيح المسافة الزائدة) ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s.%(msecs)03d] %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger("WebookBot")
 
-def test_official_joke_api():
-    """اختبار Official Joke API"""
-    print("\n🧪 اختبار Official Joke API...")
-    print("="*50)
+# --- 2. ملف الإعدادات المركزي (Configuration) ---
+CONFIG = {
+    "EVENT_ID": "match-event-2026", 
+    "TARGET_ZONES": ["113", "114"],  
+    "MAX_TICKETS_PER_ACCOUNT": 5,
+    "REQUEST_DELAY": 0.5,           
     
-    try:
-        response = requests.get(
-            "https://official-joke-api.appspot.com/random_joke",
-            timeout=5
-        )
-        response.raise_for_status()
-        data = response.json()
+    "PROXIES": [
+        "http://username:password@proxy_ip1:port",
+        "http://username:password@proxy_ip2:port"
+    ],
+    
+    "ACCOUNTS": [
+        {"email": "yusefagha@outlook.sa", "auth_token": "ACCESS_TOKEN_HERE_1"},
+        {"email": "fesasuperx@gmail.com", "auth_token": "ACCESS_TOKEN_HERE_2"}
+    ],
+    
+    "CAPTCHA_API_KEY": "YOUR_CAPTCHA_SOLVER_API_KEY"
+}
+
+class WebookBotEngine:
+    def __init__(self, config):
+        self.config = config
+        self.is_running = False
+        self.session_clients = {}
+
+    # --- 3. محرك تخطي الحماية ---
+    async def fetch_captcha_token(self, client):
+        if not self.config["CAPTCHA_API_KEY"]:
+            return None
         
-        print("✅ الاتصال: نجح")
-        print(f"📚 المصدر: {data.get('type', 'general')}")
-        print(f"😂 النكتة: {data['setup']}")
-        print(f"   {data['punchline']}")
-        return True
-    except Exception as e:
-        print(f"❌ الخطأ: {str(e)}")
-        return False
+        payload = {
+            "clientKey": self.config["CAPTCHA_API_KEY"],
+            "task": {
+                "type": "AntiTurnstileTaskMini", 
+                "websiteURL": "https://webook.com",
+                "websiteKey": "SITE_KEY_EXTRACTED_FROM_F12"
+            }
+        }
+        try:
+            await asyncio.sleep(0.1)
+            return "mock_captcha_token_xyz123"
+        except Exception as e:
+            logger.error(f"❌ فشل جلب توكن تخطي الكابتشا: {e}")
+            return None
 
-
-def test_dad_jokes_api():
-    """اختبار icanhazdadjoke.com"""
-    print("\n🧪 اختبار Dad Jokes API...")
-    print("="*50)
-    
-    try:
-        response = requests.get(
-            "https://icanhazdadjoke.com/?format=json",
-            timeout=5
-        )
-        response.raise_for_status()
-        data = response.json()
+    # --- 4. محرك الطلبات الأساسي لكل حساب ---
+    async def start_account_worker(self, account):
+        email = account["email"]
+        token = account["auth_token"]
         
-        print("✅ الاتصال: نجح")
-        print(f"😂 النكتة: {data['joke']}")
-        return True
-    except Exception as e:
-        print(f"❌ الخطأ: {str(e)}")
-        return False
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Origin": "https://webook.com",
+            "Referer": "https://webook.com/"
+        }
 
-
-def test_multiple_jokes(count=5):
-    """اختبار جلب نكات متعددة"""
-    print(f"\n🧪 اختبار جلب {count} نكات متعددة...")
-    print("="*50)
-    
-    success_count = 0
-    error_count = 0
-    
-    for i in range(count):
-        try:
-            print(f"\n📌 النكتة #{i+1}:")
-            response = requests.get(
-                "https://official-joke-api.appspot.com/random_joke",
-                timeout=5
-            )
-            response.raise_for_status()
-            data = response.json()
+        proxy = random.choice(self.config["PROXIES"]) if self.config["PROXIES"] else None
+        
+        async with httpx.AsyncClient(proxies=proxy, headers=headers, timeout=3.0) as client:
+            logger.info(f"🟢 تم تشغيل الـ Worker للحساب: {email} | البروكسي: {proxy if proxy else 'مباشر'}")
             
-            print(f"  {data['setup']}")
-            print(f"  {data['punchline']}")
-            success_count += 1
-            
-            # تأخير لتجنب الضغط على الـ API
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"  ❌ خطأ: {str(e)}")
-            error_count += 1
-    
-    print(f"\n📊 النتائج: {success_count} نجح، {error_count} فشل")
+            while self.is_running:
+                for zone in self.config["TARGET_ZONES"]:
+                    try:
+                        captcha_token = await self.fetch_captcha_token(client)
+                        reserve_url = f"https://webook.com/api/v1/events/{self.config['EVENT_ID']}/book"
+                        
+                        payload = {
+                            "zone_prefix": zone,
+                            "quantity": 1,
+                            "captcha_token": captcha_token
+                        }
+                        
+                        logger.info(f"📡 [محاولة حجز] الحساب: {email} يرسل طلباً للمربع {zone}...")
+                        
+                        response = await client.post(reserve_url, json=payload)
+                        
+                        if response.status_code == 200:
+                            res_data = response.json()
+                            hold_token = res_data.get("hold_token")
+                            # تم تصحيح الدالة هنا من logger.all إلى logger.info
+                            logger.info(f"🎉 [نجاح مذهل] تم خطف المقعد للحساب {email}! الرمز: {hold_token}")
+                            break
+                        elif response.status_code == 429:
+                            logger.warning(f"⚠️ [Rate Limit] الحساب {email} يواجه ضغطاً كبيراً، جاري التهدئة...")
+                            await asyncio.sleep(2)
+                        else:
+                            logger.error(f"❌ [فشل] استجابة السيرفر للحساب {email}: {response.status_code} | {response.text}")
+                            
+                    except httpx.HTTPError as http_err:
+                        logger.error(f"⚠️ [خطأ شبكة] الحساب {email}: {http_err}")
+                    except Exception as e:
+                        logger.error(f"⚠️ [خطأ غير متوقع] في الحساب {email}: {e}")
+                
+                await asyncio.sleep(self.config["REQUEST_DELAY"])
 
+    # --- 5. مدير تشغيل الحسابات بالتوازي ---
+    async def run_engine(self):
+        self.is_running = True
+        logger.info("🚀 جاري تشغيل نظام الأتمتة...")
+        
+        tasks = [self.start_account_worker(acc) for acc in self.config["ACCOUNTS"]]
+        await asyncio.gather(*tasks)
 
-def test_api_limits():
-    """اختبار حدود الـ API"""
-    print("\n🧪 اختبار حدود الـ API...")
-    print("="*50)
-    
-    print("\nجلب 10 نكات متتالية بسرعة...")
-    start_time = time.time()
-    
-    success = 0
-    for i in range(10):
-        try:
-            response = requests.get(
-                "https://official-joke-api.appspot.com/random_joke",
-                timeout=5
-            )
-            if response.status_code == 200:
-                success += 1
-        except:
-            pass
-    
-    elapsed_time = time.time() - start_time
-    
-    print(f"✅ نجح: {success}/10")
-    print(f"⏱️  الوقت المستغرق: {elapsed_time:.2f} ثانية")
-    print(f"📊 المتوسط: {elapsed_time/10:.2f} ثانية لكل طلب")
-
-
-def test_api_response_time():
-    """اختبار وقت الاستجابة"""
-    print("\n🧪 اختبار أوقات الاستجابة...")
-    print("="*50)
-    
-    apis = {
-        "Official Joke API": "https://official-joke-api.appspot.com/random_joke",
-        "Dad Jokes": "https://icanhazdadjoke.com/?format=json"
-    }
-    
-    for api_name, api_url in apis.items():
-        try:
-            start = time.time()
-            response = requests.get(api_url, timeout=5)
-            elapsed = time.time() - start
-            
-            print(f"\n📚 {api_name}:")
-            print(f"   ✅ الحالة: {response.status_code}")
-            print(f"   ⏱️  وقت الاستجابة: {elapsed*1000:.2f} ms")
-        except Exception as e:
-            print(f"\n📚 {api_name}:")
-            print(f"   ❌ الخطأ: {str(e)}")
-
-
-# =====================================================
-#   تشغيل جميع الاختبارات
-# =====================================================
+    def stop_engine(self):
+        self.is_running = False
+        logger.info("🛑 تم إرسال أمر إيقاف النظام بالكامل.")
 
 if __name__ == "__main__":
-    print("🎭 برنامج اختبار مصادر النكات 🎭")
-    print("="*50)
-    
-    # اختبار كل مصدر على حدة
-    test_official_joke_api()
-    time.sleep(1)
-    
-    test_dad_jokes_api()
-    time.sleep(1)
-    
-    # اختبار النكات المتعددة
-    test_multiple_jokes(count=5)
-    time.sleep(1)
-    
-    # اختبار أوقات الاستجابة
-    test_api_response_time()
-    time.sleep(1)
-    
-    # اختبار حدود الـ API
-    test_api_limits()
-    
-    print("\n" + "="*50)
-    print("✅ انتهت جميع الاختبارات!")
-    print("="*50)
+    engine = WebookBotEngine(CONFIG)
+    try:
+        asyncio.run(engine.run_engine())
+    except KeyboardInterrupt:
+        engine.stop_engine()
+        logger.info("النظام توقف بواسطة المستخدم.")
